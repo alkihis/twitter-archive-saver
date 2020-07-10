@@ -61,6 +61,8 @@ export interface ArchiveSaveOptions {
   lists?: boolean;
   ad_archive?: boolean;
 
+  compress?: boolean;
+
   /** Summary user data and screen name history is always stored. */
   user?: {
     phone_number?: boolean, 
@@ -106,15 +108,32 @@ export class ArchiveSaver {
   }) : Promise<ArchiveSave> {
     const info = archive.synthetic_info;
 
-    let tweet_zip: PartialTweet[] | null = null;
+    let tweet_zip: PartialTweet[] | ArrayBuffer | null = null;
     if (options.tweets) {
-      tweet_zip = archive.tweets.all;
+      if (options.compress) {
+        const tweets = archive.tweets.all;
+
+        for (const tweet of tweets) {
+          delete tweet.created_at_d;
+        }
+    
+        tweet_zip = await new JSZip().file("tweet.json", JSON.stringify(tweets)).generateAsync({
+          type: "arraybuffer",
+          compression: "DEFLATE",
+          compressionOptions: {
+            level: 6 // Not too much, if we want a good generation time
+          }
+        });
+      } 
+      else {
+        tweet_zip = archive.tweets.all;
+      }
     }
 
     const mutes = options.mutes ? [...archive.mutes] : [];
     const blocks = options.blocks ? [...archive.blocks] : [];
 
-    let dms: GDPRConversation[] | null = null;
+    let dms: GDPRConversation[] | ArrayBuffer | null = null;
     if (options.dms && archive.is_gdpr && archive.messages) {
       // Swallow copy all the dms, save them to a JSZip instance
       /* 
@@ -123,20 +142,55 @@ export class ArchiveSaver {
           ...
         ]
       */
-
-      dms = archive.messages.all.map(convertConversationToGDPRConversation);
+      if (options.compress) {
+        dms = await new JSZip()
+          .file(
+            "dm.json", 
+            JSON.stringify(archive.messages.all.map(convertConversationToGDPRConversation))
+          )
+          .generateAsync({
+            type: "arraybuffer",
+            compression: "DEFLATE",
+            compressionOptions: {
+              level: 6 // Not too much, if we want a good generation time
+            }
+          });
+      }
+      else {
+        dms = archive.messages.all.map(convertConversationToGDPRConversation);
+      }
     }
 
     info.version = this.CURRENT_EXPORT_VERSION;
 
-    let ads: AdSave | null = null;
+    let ads: AdSave | ArrayBuffer | null = null;
     if (options.ad_archive) {
-      ads = {  
+      const all = {  
         impressions: archive.ads.impressions,
         engagements: archive.ads.engagements,
         mobile_conversions: archive.ads.mobile_conversions,
         online_conversions: archive.ads.online_conversions,
       };
+
+      if (options.compress) {
+        const str = JSON.stringify(all);
+  
+        ads = await new JSZip()
+          .file(
+            "ads.json", 
+            str
+          )
+          .generateAsync({
+            type: "arraybuffer",
+            compression: "DEFLATE",
+            compressionOptions: {
+              level: 6 // Not too much, if we want a good generation time
+            }
+          });
+      }
+      else {
+        ads = all;
+      }
     }
 
     const save: ArchiveSave = {
